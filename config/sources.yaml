@@ -53,12 +53,6 @@ sources:
     rate_limit_per_min: 60
 
   # --- Tier 3: Crypto-specific ---
-  cryptopanic:
-    enabled: true
-    category: crypto
-    weight: 0.9
-    rate_limit_per_min: 30
-
   crypto_feargreed:
     enabled: true
     category: crypto

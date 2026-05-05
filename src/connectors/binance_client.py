@@ -164,6 +164,135 @@ class BinanceConnector:
         logger.success(f"Saved {len(df)} rows to {out_path}")
         return out_path
 
+# ---------- Funding rates (perpetual futures) ----------
+    def get_funding_rate(
+        self,
+        symbol: str = "BTCUSDT",
+        days: int = 30,
+    ) -> pd.DataFrame:
+        """
+        Fetch historical funding rates for a perpetual futures pair.
+
+        Funding rate = small periodic payment between longs and shorts on
+        perpetual contracts. Strongly positive = longs over-leveraged
+        (bearish contrarian). Strongly negative = shorts over-leveraged
+        (bullish contrarian).
+
+        Notes:
+        - Endpoint is on Binance Futures (fapi), not Spot
+        - Free, no auth needed for public endpoint
+        - Rates settle every 8 hours (3 per day)
+        """
+        # Funding endpoint is on the futures API, not the spot API the client
+        # is configured for. We hit it directly via requests.
+        import requests
+        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = end_ms - days * 24 * 3600 * 1000
+
+        url = "https://fapi.binance.com/fapi/v1/fundingRate"
+        params = {
+            "symbol": symbol,
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": 1000,
+        }
+
+        logger.info(f"[binance:funding] fetching {symbol} funding rates ({days}d)")
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+        df["datetime"] = pd.to_datetime(df["fundingTime"], unit="ms", utc=True)
+        df["funding_rate"] = df["fundingRate"].astype(float)
+        df["symbol"] = symbol
+        df = df[["symbol", "datetime", "funding_rate"]].sort_values("datetime", ascending=False)
+        return df.reset_index(drop=True)
+
+    # ---------- Open interest ----------
+    def get_open_interest(
+        self,
+        symbol: str = "BTCUSDT",
+        period: str = "1h",
+        days: int = 7,
+    ) -> pd.DataFrame:
+        """
+        Fetch historical open interest stats for a perpetual futures pair.
+
+        Open Interest = total notional value of open futures contracts.
+        Rising OI + rising price = healthy trend (new money entering).
+        Rising OI + falling price = bearish leverage building up.
+        Falling OI = positions closing (trend exhaustion or capitulation).
+
+        period: "5m" | "15m" | "30m" | "1h" | "2h" | "4h" | "6h" | "12h" | "1d"
+        """
+        import requests
+        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = end_ms - days * 24 * 3600 * 1000
+
+        url = "https://fapi.binance.com/futures/data/openInterestHist"
+        params = {
+            "symbol": symbol,
+            "period": period,
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": 500,
+        }
+
+        logger.info(f"[binance:oi] fetching {symbol} open interest ({days}d, {period})")
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+        df["datetime"]   = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        df["oi_units"]   = df["sumOpenInterest"].astype(float)        # contracts
+        df["oi_usd"]     = df["sumOpenInterestValue"].astype(float)   # notional USD
+        df["symbol"]     = symbol
+        df = df[["symbol", "datetime", "oi_units", "oi_usd"]].sort_values("datetime", ascending=False)
+        return df.reset_index(drop=True)
+
+    # ---------- Funding/OI features ----------
+    def funding_oi_features(self, symbol: str = "BTCUSDT") -> pd.DataFrame:
+        """
+        Build a single-row feature DataFrame combining latest funding + OI signals.
+        """
+        funding = self.get_funding_rate(symbol, days=30)
+        oi = self.get_open_interest(symbol, period="1h", days=7)
+
+        feat: dict = {
+            "fund_oi_symbol":     symbol,
+            "fund_oi_fetched_at": datetime.now(timezone.utc),
+        }
+
+        if not funding.empty:
+            f_latest = funding.iloc[0]["funding_rate"]
+            f_mean_30d = funding["funding_rate"].mean()
+            f_std_30d = funding["funding_rate"].std()
+            feat[f"funding_latest"]      = float(f_latest)
+            feat[f"funding_mean_30d"]    = float(f_mean_30d)
+            feat[f"funding_zscore_30d"]  = float((f_latest - f_mean_30d) / f_std_30d) if f_std_30d > 0 else 0.0
+            feat[f"funding_positive"]    = int(f_latest > 0)
+            feat[f"funding_extreme_pos"] = int(f_latest > 0.01 / 100 * 3)   # > 3x typical 0.01%
+            feat[f"funding_extreme_neg"] = int(f_latest < -0.01 / 100 * 3)
+
+        if not oi.empty and len(oi) >= 24:
+            oi_latest = oi.iloc[0]["oi_usd"]
+            oi_24h_ago = oi.iloc[24]["oi_usd"] if len(oi) > 24 else oi.iloc[-1]["oi_usd"]
+            oi_chg_24h_pct = (oi_latest - oi_24h_ago) / oi_24h_ago * 100 if oi_24h_ago > 0 else 0
+            feat[f"oi_usd_latest"]       = float(oi_latest)
+            feat[f"oi_chg_pct_24h"]      = float(oi_chg_24h_pct)
+            feat[f"oi_rising_24h"]       = int(oi_chg_24h_pct > 0)
+            feat[f"oi_extreme_rise_24h"] = int(oi_chg_24h_pct > 10)
+            feat[f"oi_extreme_drop_24h"] = int(oi_chg_24h_pct < -10)
+
+        return pd.DataFrame([feat])
 
 if __name__ == "__main__":
     conn = BinanceConnector()
@@ -182,3 +311,24 @@ if __name__ == "__main__":
 
     print("\n--- Saving to parquet ---")
     conn.save_bars(df, "btcusdt_30d_daily")
+
+    print("\n--- Funding rate (BTCUSDT, 7d) ---")
+    fdf = conn.get_funding_rate("BTCUSDT", days=7)
+    print(f"  rows: {len(fdf)}")
+    if not fdf.empty:
+        print(fdf.head(5).to_string(index=False))
+        print(f"  Latest funding: {fdf.iloc[0]['funding_rate']*100:.4f}% per 8h")
+        annualized = fdf.iloc[0]['funding_rate'] * 3 * 365 * 100
+        print(f"  Annualized:     {annualized:.2f}%")
+
+    print("\n--- Open interest (BTCUSDT, 7d, 1h) ---")
+    oidf = conn.get_open_interest("BTCUSDT", period="1h", days=7)
+    print(f"  rows: {len(oidf)}")
+    if not oidf.empty:
+        print(oidf.head(5).to_string(index=False))
+
+    print("\n--- Combined funding+OI features ---")
+    feat = conn.funding_oi_features("BTCUSDT")
+    if not feat.empty:
+        for col in feat.columns:
+            print(f"  {col:30s} = {feat[col].iloc[0]}")
