@@ -66,3 +66,12 @@ ipykernel==6.29.5
 # Utilities
 tqdm==4.67.1
 rich==13.9.4
+
+# Plugin sources (Day 3+)
+pytrends==4.9.2
+sec-edgar-downloader==5.0.3
+vaderSentiment==3.3.2
+aiohttp==3.10.11
+nest-asyncio==1.6.0
+feedparser==6.0.11
+telethon==1.38.1

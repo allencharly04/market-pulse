@@ -1,0 +1,117 @@
+# ============================================================
+# Agent 29 — Data Source Registry
+# ============================================================
+# Set enabled: false to skip a source globally.
+# weight is a starting hint for the importance tracker; will be
+# updated empirically as we collect performance data.
+# ============================================================
+
+sources:
+
+  # --- Tier 1: News & Macro ---
+  newsapi:
+    enabled: true
+    category: news
+    weight: 1.0
+    rate_limit_per_min: 1   # 100 reqs/day on free tier ~= 1/min sustained
+
+  finnhub:
+    enabled: true
+    category: news
+    weight: 1.2
+    rate_limit_per_min: 60  # free tier
+
+  fred:
+    enabled: true
+    category: macro
+    weight: 1.5
+    rate_limit_per_min: 120
+
+  yfinance_news:
+    enabled: true
+    category: news
+    weight: 0.7
+    rate_limit_per_min: 30
+
+  # --- Tier 2: Social & Search ---
+  stocktwits:
+    enabled: true
+    category: social
+    weight: 0.8
+    rate_limit_per_min: 200
+
+  google_trends:
+    enabled: true
+    category: social
+    weight: 0.6
+    rate_limit_per_min: 5   # pytrends is unofficial, conservative
+
+  reddit_json:
+    enabled: true
+    category: social
+    weight: 0.5  # academic evidence: weak/contrarian
+    rate_limit_per_min: 60
+
+  # --- Tier 3: Crypto-specific ---
+  cryptopanic:
+    enabled: true
+    category: crypto
+    weight: 0.9
+    rate_limit_per_min: 30
+
+  crypto_feargreed:
+    enabled: true
+    category: crypto
+    weight: 1.0
+    rate_limit_per_min: 60
+
+  binance_funding:
+    enabled: true
+    category: crypto
+    weight: 1.3  # strong leading indicator
+    rate_limit_per_min: 60
+
+  binance_oi:
+    enabled: true
+    category: crypto
+    weight: 1.1
+    rate_limit_per_min: 60
+
+  coingecko:
+    enabled: true
+    category: crypto
+    weight: 0.8
+    rate_limit_per_min: 30  # free tier
+
+  # --- Tier 4: SEC & Filings ---
+  sec_edgar:
+    enabled: true
+    category: filings
+    weight: 1.0
+    rate_limit_per_min: 10  # SEC limits to 10/sec, we'll be conservative
+
+  openinsider:
+    enabled: true
+    category: filings
+    weight: 0.7  # weak short-term signal
+    rate_limit_per_min: 6   # respectful scrape rate
+
+  # --- Tier 5: Sentiment models (not data sources, but slot here) ---
+  finbert:
+    enabled: true
+    category: model
+    weight: 1.4  # best-in-class headline scorer
+    rate_limit_per_min: 99999  # local model, no limit
+
+  vader:
+    enabled: true
+    category: model
+    weight: 0.6  # baseline comparison
+    rate_limit_per_min: 99999  # local
+
+# Global settings
+fetch_settings:
+  max_concurrent: 5         # how many sources to fetch in parallel
+  timeout_seconds: 30       # per-source timeout
+  retry_attempts: 2
+  retry_delay_seconds: 5

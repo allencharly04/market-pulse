@@ -78,3 +78,8 @@ desktop.ini
 
 # Backtest results
 backtests/results/
+
+# Telegram session
+data/telegram_session*
+*.session
+*.session-journal
