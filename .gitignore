@@ -83,3 +83,6 @@ backtests/results/
 data/telegram_session*
 *.session
 *.session-journal
+
+# Trained model artifacts (regenerable)
+data/models/
