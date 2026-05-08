@@ -123,6 +123,22 @@ class AlpacaConnector:
         logger.success(f"Saved {len(df)} rows to {out_path}")
         return out_path
 
+def fetch_long_history(symbols: list[str] = None, days: int = 365) -> dict:
+    """
+    Fetch and save a long history of daily bars for multiple tickers.
+    Used for feature engineering warmup (some indicators need 200+ bars).
+    """
+    symbols = symbols or ["SPY", "QQQ", "AAPL", "NVDA", "MSFT", "GOOGL", "TSLA", "META", "AMZN", "JPM"]
+    conn = AlpacaConnector()
+    saved = {}
+    for sym in symbols:
+        df = conn.get_bars(sym, days=days)
+        if df.empty:
+            logger.warning(f"No data for {sym}")
+            continue
+        path = conn.save_bars(df, f"{sym.lower()}_{days}d_daily")
+        saved[sym] = path
+    return saved
 
 if __name__ == "__main__":
     # Smoke test when run directly
