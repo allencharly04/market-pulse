@@ -39,6 +39,7 @@ from src.connectors.rss_source import RSSSource
 from src.connectors.telegram_source import TelegramSource
 from src.sentiment.finbert import FinBERTScorer
 from src.sentiment.vader import VaderScorer
+from src.sentiment.ticker_extractor import TickerExtractor
 
 load_dotenv()
 
@@ -74,6 +75,11 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
             finbert_compound  REAL,
             vader_compound    REAL,
             vader_label       TEXT,
+            -- ticker tagging
+            primary_ticker    TEXT,
+            tickers           TEXT,
+            ticker_count      INTEGER,
+            asset_classes     TEXT,
             -- bookkeeping
             content_hash      TEXT UNIQUE,
             scored_at         TEXT NOT NULL
@@ -82,6 +88,7 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published ON news(published_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_news_ticker    ON news(ticker)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_news_source    ON news(source)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_news_primary_ticker ON news(primary_ticker)")
 
     # Features table — one row per source per cycle
     conn.execute("""
@@ -309,6 +316,7 @@ def save_news(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         "source", "published_at", "ticker", "title", "url", "origin",
         "finbert_pos", "finbert_neg", "finbert_neu", "finbert_label", "finbert_compound",
         "vader_compound", "vader_label",
+        "primary_ticker", "tickers", "ticker_count", "asset_classes",
         "content_hash", "scored_at",
     ]
     # ensure all cols exist
@@ -400,6 +408,19 @@ def run_cycle(
         logger.success(f"[orchestrator] FinBERT scored {len(headlines)} headlines")
     if not headlines.empty and vader is not None:
         headlines = vader.score_dataframe(headlines, text_col="title")
+    # 4b. Ticker extraction
+    if not headlines.empty:
+        extractor = TickerExtractor()
+        headlines = extractor.tag_dataframe(headlines, text_col="title")
+        # Rename the columns added by tag_dataframe to match our DB schema
+        headlines = headlines.rename(columns={
+            "tickers_count":   "ticker_count",
+            "tickers_classes": "asset_classes",
+        })
+        n_tagged = headlines["primary_ticker"].notna().sum()
+        logger.success(
+            f"[orchestrator] tagged {n_tagged}/{len(headlines)} headlines with tickers"
+        )
 
     # 5. Add content hashes for dedup
     headlines = add_content_hash(headlines)

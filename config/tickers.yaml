@@ -1,0 +1,156 @@
+# ============================================================
+# Agent 29 — Ticker Registry
+# ============================================================
+# Each entry: ticker → list of name aliases that should resolve to it.
+# Aliases are case-insensitive and matched as whole words only.
+# Add/remove tickers freely — no code changes needed.
+# ============================================================
+
+stocks:
+  # === Mega-cap tech ===
+  AAPL:    ["Apple", "Apple Inc"]
+  MSFT:    ["Microsoft"]
+  GOOGL:   ["Alphabet", "Google"]
+  AMZN:    ["Amazon"]
+  META:    ["Meta", "Meta Platforms", "Facebook"]
+  NVDA:    ["Nvidia", "NVIDIA"]
+  TSLA:    ["Tesla"]
+  AVGO:    ["Broadcom"]
+
+  # === AI / chips ===
+  AMD:     ["AMD", "Advanced Micro Devices"]
+  INTC:    ["Intel"]
+  TSM:     ["TSMC", "Taiwan Semi", "Taiwan Semiconductor"]
+  ASML:    ["ASML"]
+  ARM:     ["Arm Holdings"]
+  MU:      ["Micron"]
+  QCOM:    ["Qualcomm"]
+  SMCI:    ["Super Micro", "Supermicro"]
+  CRWV:    ["CoreWeave"]
+  PLTR:    ["Palantir"]
+
+  # === Cloud / SaaS ===
+  CRM:     ["Salesforce"]
+  ORCL:    ["Oracle"]
+  ADBE:    ["Adobe"]
+  NOW:     ["ServiceNow"]
+  SHOP:    ["Shopify"]
+  SNOW:    ["Snowflake"]
+  NET:     ["Cloudflare"]
+  DDOG:    ["Datadog"]
+  MDB:     ["MongoDB"]
+
+  # === Consumer / retail ===
+  WMT:     ["Walmart"]
+  COST:    ["Costco"]
+  HD:      ["Home Depot"]
+  TGT:     ["Target Corp"]
+  NKE:     ["Nike"]
+  SBUX:    ["Starbucks"]
+  MCD:     ["McDonald's", "McDonalds"]
+  DIS:     ["Disney", "Walt Disney"]
+  NFLX:    ["Netflix"]
+
+  # === Finance ===
+  JPM:     ["JPMorgan", "JP Morgan", "JPMorgan Chase"]
+  BAC:     ["Bank of America"]
+  GS:      ["Goldman Sachs", "Goldman"]
+  MS:      ["Morgan Stanley"]
+  WFC:     ["Wells Fargo"]
+  C:       ["Citigroup", "Citibank"]
+  V:       ["Visa Inc"]
+  MA:      ["Mastercard"]
+  BRK.B:   ["Berkshire Hathaway", "Berkshire"]
+  BLK:     ["BlackRock"]
+
+  # === EV / Auto ===
+  F:       ["Ford", "Ford Motor"]
+  GM:      ["General Motors"]
+  RIVN:    ["Rivian"]
+  LCID:    ["Lucid Group", "Lucid Motors"]
+  TM:      ["Toyota"]
+  NIO:     ["Nio Inc"]
+
+  # === Energy ===
+  XOM:     ["Exxon", "ExxonMobil"]
+  CVX:     ["Chevron"]
+  COP:     ["ConocoPhillips"]
+
+  # === Healthcare / pharma ===
+  UNH:     ["UnitedHealth"]
+  JNJ:     ["Johnson & Johnson", "Johnson and Johnson"]
+  PFE:     ["Pfizer"]
+  LLY:     ["Eli Lilly"]
+  MRK:     ["Merck"]
+  ABBV:    ["AbbVie"]
+
+  # === Travel / leisure ===
+  ABNB:    ["Airbnb"]
+  UBER:    ["Uber Technologies", "Uber"]
+  LYFT:    ["Lyft"]
+  BA:      ["Boeing"]
+  DAL:     ["Delta Air"]
+  UAL:     ["United Airlines"]
+
+  # === Meme / retail-favorite ===
+  GME:     ["GameStop"]
+  AMC:     ["AMC Entertainment"]
+  HOOD:    ["Robinhood"]
+  COIN:    ["Coinbase"]
+  MSTR:    ["MicroStrategy", "Strategy Inc"]
+  RDDT:    ["Reddit Inc"]
+
+  # === ETFs (commonly mentioned) ===
+  SPY:     ["S&P 500", "SPY ETF"]
+  QQQ:     ["Nasdaq 100", "QQQ"]
+  IWM:     ["Russell 2000"]
+  GLD:     ["Gold ETF"]
+  TLT:     ["Long Treasury", "20-Year Treasury"]
+
+crypto:
+  # === Top crypto by market cap ===
+  BTC:     ["Bitcoin", "BTC"]
+  ETH:     ["Ethereum", "Ether"]
+  BNB:     ["BNB", "Binance Coin"]
+  SOL:     ["Solana"]
+  XRP:     ["XRP", "Ripple"]
+  ADA:     ["Cardano"]
+  DOGE:    ["Dogecoin"]
+  AVAX:    ["Avalanche"]
+  TRX:     ["Tron"]
+  DOT:     ["Polkadot"]
+  MATIC:   ["Polygon", "Matic"]
+  LINK:    ["Chainlink"]
+  TON:     ["Toncoin"]
+  SHIB:    ["Shiba Inu"]
+  LTC:     ["Litecoin"]
+  ATOM:    ["Cosmos"]
+  UNI:     ["Uniswap"]
+  ETC:     ["Ethereum Classic"]
+  XLM:     ["Stellar"]
+  NEAR:    ["NEAR Protocol"]
+  APT:     ["Aptos"]
+  ARB:     ["Arbitrum"]
+  OP:      ["Optimism"]
+
+# === Tickers to NEVER auto-match ===
+# These cause too many false positives — only match if explicit cashtag like $A
+ambiguous:
+  - "A"      # too short — Agilent, but "A" appears everywhere
+  - "I"      # Intelligent Systems
+  - "U"      # Unity Software
+  - "X"      # United States Steel
+  - "T"      # AT&T — but "T" appears in countless contexts
+  - "M"      # Macy's
+  - "K"      # Kellogg
+  - "AI"     # C3.ai — but "AI" is everywhere now
+  - "ON"     # ON Semi
+  - "NEW"    # Puxin
+  - "CEO"    # not a ticker but often misread
+  - "GO"     # not a ticker but flag for safety
+
+# === Crypto slang/aliases that are too generic ===
+crypto_ambiguous:
+  - "GAS"    # too generic
+  - "POW"    # too generic
+  - "POS"    # too generic
