@@ -1,10 +1,10 @@
 """
-Master feature store for Agent 29.
+Master feature store for Market Pulse.
 
 Combines per-ticker:
 - Technical features from OHLCV bars (RSI, MACD, ATR, etc.)
 - Sentiment aggregations from news (per ticker, multiple time windows)
-- Macro context (VIX, yield curve, Crypto F&G — same for all tickers)
+- Macro context — TIME-ALIGNED via macro_history table (v2 P0 fix)
 
 Output: data/features/master.parquet — one row per (ticker, timestamp).
 This is the ML-ready feature matrix.
@@ -34,7 +34,8 @@ MASTER_PATH = FEATURES_DIR / "master.parquet"
 def load_ohlcv_for_ticker(ticker: str, prefer_long: bool = True) -> pd.DataFrame:
     """
     Load the most useful OHLCV file for a ticker.
-    Prefers _365d_ files when available (longer history = more features populated).
+    Prefers longer-history files (1095d > 365d > anything) so warmup-heavy
+    indicators have enough bars.
     """
     ticker_lower = ticker.lower()
 
@@ -55,13 +56,11 @@ def load_ohlcv_for_ticker(ticker: str, prefer_long: bool = True) -> pd.DataFrame
 
 
 def discover_tickers() -> list[str]:
-    """Find all tickers we have OHLCV files for."""
-    # Prefer longer-history files. Skip _30d_ files (not enough warmup).
+    """Find all tickers we have OHLCV files for. Skips short-history files."""
     files = (
         list(RAW_DIR.glob("*_1095d_daily.parquet"))
         + list(RAW_DIR.glob("*_365d_daily.parquet"))
     )
-
     tickers = sorted(set(f.stem.split("_")[0].upper() for f in files))
     return tickers
 
@@ -73,7 +72,11 @@ def load_sentiment_per_ticker() -> pd.DataFrame:
     """
     Pull from SQLite all scored news, aggregate by ticker over time windows.
 
-    Returns columns: ticker, sent_avg_24h, sent_count_24h, sent_pos_pct_24h, ...
+    Returns one row per ticker with columns: ticker, sent_avg_24h, sent_count_24h,
+    sent_pos_pct_24h, ... (×3 windows)
+
+    NOTE: this is a CURRENT snapshot, not time-aligned. Will be replaced in
+    P1 with proper time-aligned sentiment computed from raw news timestamps.
     """
     if not DB_PATH.exists():
         logger.warning(f"[feature_store] {DB_PATH} not found — skipping sentiment")
@@ -122,22 +125,65 @@ def load_sentiment_per_ticker() -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
 
-    # Each row is one (ticker, window) — pivot to wide format
     long_df = pd.DataFrame(rows)
     wide = long_df.groupby("ticker").first().reset_index()
-    # Some windows might have NaN if no headlines; fill with 0 for counts and 0 for sentiment
     return wide
 
 
 # ============================================================
-# 3. Macro features (latest cycle)
+# 3a. Macro features — time-aligned (v2 P0 fix)
 # ============================================================
-def load_macro_features() -> pd.DataFrame:
+def load_macro_history() -> pd.DataFrame:
     """
-    Load macro features from the most recent cycle. These are constant across
-    tickers (same VIX, yield curve, F&G for everyone).
+    Load full daily macro history from the macro_history table.
 
-    Returns single-row DataFrame to be cross-joined with each ticker.
+    Returns wide DataFrame indexed by date, one column per macro series.
+    Forward-fills gaps (e.g., weekends for daily series, between monthly
+    observations for unemployment/CPI) so every trading day has values.
+    """
+    if not DB_PATH.exists():
+        logger.warning(f"[feature_store] {DB_PATH} not found — no macro history")
+        return pd.DataFrame()
+
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        df = pd.read_sql_query(
+            "SELECT date, friendly, value FROM macro_history",
+            conn,
+        )
+
+    if df.empty:
+        logger.warning(
+            "[feature_store] macro_history is empty. "
+            "Run: python -m src.connectors.fred_history"
+        )
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"], utc=True)
+    wide = df.pivot(index="date", columns="friendly", values="value")
+    wide = wide.sort_index()
+
+    # Forward-fill so weekends + monthly-series gaps get last known value.
+    # At any given trading day, the "current" macro value is the most recent
+    # FRED observation, not NaN.
+    wide = wide.ffill()
+
+    # Prefix with macro_ to match feature_store conventions
+    wide.columns = [f"macro_{c}" for c in wide.columns]
+
+    logger.info(
+        f"[feature_store] loaded macro history: "
+        f"{wide.shape[0]} dates × {wide.shape[1]} series"
+    )
+    return wide
+
+
+# ============================================================
+# 3b. Macro snapshot — for the dashboard's current-state display
+# ============================================================
+def load_macro_snapshot() -> pd.DataFrame:
+    """
+    Load latest-cycle macro snapshot (single row, latest values + regime flags).
+    Used by the dashboard for current-state display, NOT for ML training.
     """
     if not DB_PATH.exists():
         return pd.DataFrame()
@@ -155,7 +201,6 @@ def load_macro_features() -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Wide single-row frame with each feature as a column
     wide: dict = {}
     for _, r in df.iterrows():
         name = r["feature_name"]
@@ -183,10 +228,11 @@ def build_master_features(
     logger.info(f"[feature_store] building features for {len(tickers)} tickers: {tickers}")
 
     sent_df = load_sentiment_per_ticker()
-    macro_df = load_macro_features()
+    macro_history = load_macro_history()
     logger.info(
         f"[feature_store] loaded sentiment for {len(sent_df)} tickers, "
-        f"{len(macro_df.columns) if not macro_df.empty else 0} macro features"
+        f"{macro_history.shape[1] if not macro_history.empty else 0} macro series "
+        f"× {macro_history.shape[0] if not macro_history.empty else 0} dates"
     )
 
     all_rows = []
@@ -205,11 +251,10 @@ def build_master_features(
 
         # Compute technical features
         feats = add_technical_features(ohlcv, drop_na=False)
-
-        # Add ticker column
         feats["ticker"] = ticker
 
-        # Merge sentiment for this ticker (broadcast to all rows — sentiment is "current state")
+        # Merge sentiment for this ticker
+        # (Still a snapshot — proper time-aligned sentiment comes in P1)
         if not sent_df.empty and ticker in sent_df["ticker"].values:
             srow = sent_df[sent_df["ticker"] == ticker].iloc[0]
             for col in sent_df.columns:
@@ -217,21 +262,27 @@ def build_master_features(
                     continue
                 feats[col] = srow[col]
         else:
-            # Set sentiment columns to NaN if no news for this ticker
             for col in sent_df.columns:
                 if col != "ticker":
                     feats[col] = np.nan
 
-        # Merge macro (broadcast — same for everyone). Build a wide row first
-        # then concat — avoids DataFrame fragmentation warnings.
-        if not macro_df.empty:
-            macro_row = macro_df.iloc[0]
-            macro_block = pd.DataFrame(
-                [macro_row.values] * len(feats),
-                columns=macro_row.index,
-                index=feats.index,
+        # Merge macro by JOINING on date — the v2 fix.
+        # Each (ticker, date) row gets the actual macro values for THAT date.
+        if not macro_history.empty:
+            feats_with_date = feats.copy()
+            feats_with_date["_join_date"] = pd.to_datetime(
+                feats_with_date.index, utc=True
+            ).normalize()
+            macro_for_join = macro_history.copy()
+            macro_for_join.index = macro_for_join.index.normalize()
+            feats = feats_with_date.merge(
+                macro_for_join,
+                how="left",
+                left_on="_join_date",
+                right_index=True,
             )
-            feats = pd.concat([feats, macro_block], axis=1)
+            feats = feats.drop(columns=["_join_date"])
+
         # Make timestamp a column instead of index
         feats = feats.reset_index()
         all_rows.append(feats)
@@ -253,7 +304,6 @@ def build_master_features(
         master_clean = master.copy()
         for col in master_clean.columns:
             if master_clean[col].dtype == object:
-                # Try numeric, fall back to string
                 try:
                     master_clean[col] = pd.to_numeric(master_clean[col])
                 except (ValueError, TypeError):
@@ -272,24 +322,24 @@ if __name__ == "__main__":
     tickers = discover_tickers()
     print(f"  {tickers}")
 
-    print("\n--- Sentiment per ticker (from DB) ---")
+    print("\n--- Sentiment per ticker (snapshot, not yet time-aligned) ---")
     sent = load_sentiment_per_ticker()
     if not sent.empty:
         print(f"  shape: {sent.shape}")
-        print(sent.head(10).to_string(index=False))
+        print(sent.head(5).to_string(index=False))
     else:
         print("  (none — DB empty?)")
 
-    print("\n--- Macro features (latest cycle) ---")
-    macro = load_macro_features()
+    print("\n--- Macro history (time-aligned, v2 P0 fix) ---")
+    macro = load_macro_history()
     if not macro.empty:
-        print(f"  {macro.shape[1]} features")
-        # Show 10 most relevant
-        important = [c for c in macro.columns if any(k in c for k in
-                     ["vix", "yield", "fng", "regime", "fed_funds"])]
-        for col in sorted(important):
-            val = macro.iloc[0][col]
-            print(f"    {col:45s} = {val}")
+        print(f"  shape: {macro.shape}  ({macro.shape[0]} dates × {macro.shape[1]} series)")
+        print(f"  date range: {macro.index.min().date()} → {macro.index.max().date()}")
+        print(f"  series: {list(macro.columns)}")
+        print(f"\n  Sample (5 most recent dates):")
+        print(macro.tail(5).to_string())
+    else:
+        print("  (empty — run: python -m src.connectors.fred_history)")
 
     print("\n--- Building master feature frame ---")
     master = build_master_features(save=True)
@@ -299,7 +349,6 @@ if __name__ == "__main__":
         print(f"  unique tickers: {master['ticker'].nunique()}")
         print(f"  date range: {master['timestamp'].min()} → {master['timestamp'].max()}")
 
-        # Show columns by category
         cols = master.columns.tolist()
         groups = {
             "OHLCV":      [c for c in cols if c in ["open", "high", "low", "close", "volume", "vwap", "trade_count", "symbol"]],
@@ -312,14 +361,26 @@ if __name__ == "__main__":
         for group, gcols in groups.items():
             print(f"    {group:12s}: {len(gcols)} columns")
 
-        # Show a snapshot of the last bar for one ticker
+        # Variance check on macro columns — proves the v2 fix
+        print("\n  Macro variance check (std should be > 0 for all):")
+        macro_cols = [c for c in master.columns if c.startswith("macro_")]
+        for col in sorted(macro_cols):
+            series = master[col].dropna()
+            if len(series) == 0:
+                print(f"    {col:35s} all NaN")
+            else:
+                marker = "✓" if series.std() > 0 else "✗"
+                print(f"    {marker} {col:35s} std={series.std():>8.4f}  "
+                      f"min={series.min():>8.2f}  max={series.max():>8.2f}  "
+                      f"unique={series.nunique()}")
+
+        # Sample latest AAPL row
         if "AAPL" in master["ticker"].values:
-            print("\n  Latest AAPL row (sample of features):")
+            print("\n  Latest AAPL row (sample features):")
             last = master[master["ticker"] == "AAPL"].iloc[-1]
-            sample_cols = ["timestamp", "close", "ret_5", "rsi_14", "macd_bull",
-                          "atr_pct", "realized_vol_20", "sent_avg_168h",
-                          "sent_count_168h", "macro_fred_vix_latest",
-                          "macro_fng_latest", "macro_regime_vix_normal"]
+            sample_cols = ["timestamp", "close", "ret_5", "rsi_14",
+                          "sent_avg_168h", "macro_vix", "macro_yield_curve_10y2y",
+                          "macro_fed_funds"]
             for col in sample_cols:
                 if col in last.index:
                     val = last[col]
